@@ -81,6 +81,9 @@ static eWanState_t wan_state_dual_stack_active(WanMgr_IfaceSM_Controller_t* pWan
 #if defined(FEATURE_MAPT) || defined(FEATURE_SUPPORT_MAPT_NAT46)
 static eWanState_t wan_state_mapt_active(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl);
 #endif //FEATURE_MAPT
+#if defined(DSLITE_FEATURE_SUPPORT_V2)
+static eWanState_t wan_state_dslite_active(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl);
+#endif //FEATURE_MAPT
 static eWanState_t wan_state_refreshing_wan(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl);
 static eWanState_t wan_state_deconfiguring_wan(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl);
 static eWanState_t wan_state_exit(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl);
@@ -109,6 +112,11 @@ static eWanState_t wan_transition_mapt_up(WanMgr_IfaceSM_Controller_t* pWanIface
 static eWanState_t wan_transition_mapt_down(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl);
 extern int mapt_feature_enable_changed;
 #endif //FEATURE_MAPT
+#if defined(DSLITE_FEATURE_SUPPORT_V2)
+static eWanState_t wan_transition_dslite_refresh(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl);
+static eWanState_t wan_transition_dslite_up(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl);
+static eWanState_t wan_transition_dslite_down(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl);
+#endif //DSLITE_FEATURE_SUPPORT_V2
 static eWanState_t wan_transition_configuring_interface(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl);
 static eWanState_t wan_transition_phy_deconfiguring(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl);
 static eWanState_t wan_transition_wan_deconfigured(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl);
@@ -695,8 +703,11 @@ void WanManager_UpdateInterfaceStatus(DML_VIRTUAL_IFACE* pVirtIf, wanmgr_iface_s
             pVirtIf->IP.Ipv6Status = WAN_IFACE_IPV6_STATE_DOWN;
             pVirtIf->IP.Ipv6Changed = FALSE;
             pVirtIf->IP.Ipv6Renewed = FALSE;
-            pVirtIf->MAP.MaptStatus = WAN_IFACE_MAPT_STATE_DOWN;     // reset MAPT flag
-            pVirtIf->MAP.MaptChanged = FALSE;                        // reset MAPT flag
+            pVirtIf->MAP.MaptStatus = WAN_IFACE_MAPT_STATE_DOWN;      // reset MAPT flag
+            pVirtIf->MAP.MaptChanged = FALSE;                         // reset MAPT flag
+            pVirtIf->DSLite.Status = WAN_IFACE_DSLITE_STATE_DOWN;     // reset DSlite flag
+            pVirtIf->DSLite.Changed = FALSE;                          // reset DSlite flag
+
             strncpy(pVirtIf->IP.Ipv6Data.address, "", sizeof(pVirtIf->IP.Ipv6Data.address));
             strncpy(pVirtIf->IP.Ipv6Data.pdIfAddress, "", sizeof(pVirtIf->IP.Ipv6Data.pdIfAddress));
             strncpy(pVirtIf->IP.Ipv6Data.sitePrefix, "", sizeof(pVirtIf->IP.Ipv6Data.sitePrefix));
@@ -722,6 +733,27 @@ void WanManager_UpdateInterfaceStatus(DML_VIRTUAL_IFACE* pVirtIf, wanmgr_iface_s
             pVirtIf->MAP.MaptChanged = FALSE;                        // reset MAPT flag
             CcspTraceInfo(("mapt: %s \n",
                    ((iface_status == WANMGR_IFACE_MAPT_START) ? "UP" : (iface_status == WANMGR_IFACE_MAPT_STOP) ? "DOWN" : "N/A")));
+
+            break;
+        }
+#endif
+#ifdef DSLITE_FEATURE_SUPPORT_V2
+        case WANMGR_IFACE_DSLITE_START:
+        {
+            WanMgr_ProcessTelemetryMarker(pVirtIf,WAN_INFO_DSLITE_STATUS_UP);
+            pVirtIf->DSlite.Status = WAN_IFACE_DSLITE_STATE_UP;
+            CcspTraceInfo(("dslite: %s \n",
+                   ((iface_status == WANMGR_IFACE_DSLITE_START) ? "UP" : (iface_status == WANMGR_DSLITE_DSLITE_STOP) ? "DOWN" : "N/A")));
+
+            break;
+        }
+        case WANMGR_IFACE_DSLITE_STOP:
+        {
+            WanMgr_ProcessTelemetryMarker(pVirtIf,WAN_ERROR_DSLITE_STATUS_DOWN);
+            pVirtIf->DSlite.Status = WAN_IFACE_DSLITE_STATE_DOWN;     // reset DSLite flag
+            pVirtIf->DSLite.Changed = FALSE;                        // reset DSLite flag
+            CcspTraceInfo(("dslite: %s \n",
+                   ((iface_status == WANMGR_IFACE_DSLITE_START) ? "UP" : (iface_status == WANMGR_IFACE_DSLITE_STOP) ? "DOWN" : "N/A")));
 
             break;
         }
@@ -1590,7 +1622,10 @@ static int wan_tearDownIPv6(WanMgr_IfaceSM_Controller_t * pWanIfaceCtrl)
 #endif
 
     sysevent_get(sysevent_fd, sysevent_token, SYSEVENT_WAN_STATUS, buf, sizeof(buf));
-    if ((strcmp(buf, WAN_STATUS_STOPPED) != 0) && ((p_VirtIf->IP.Ipv4Status == WAN_IFACE_IPV4_STATE_DOWN) && (p_VirtIf->MAP.MaptStatus == WAN_IFACE_MAPT_STATE_DOWN)))
+    if ((strcmp(buf, WAN_STATUS_STOPPED) != 0) &&
+        ((p_VirtIf->IP.Ipv4Status == WAN_IFACE_IPV4_STATE_DOWN) &&
+         (p_VirtIf->MAP.MaptStatus == WAN_IFACE_MAPT_STATE_DOWN) &&
+         (p_VirtIf->MAP.MaptStatus == WAN_IFACE_DSLITE_STATE_DOWN)))
     {
         sysevent_set(sysevent_fd, sysevent_token, SYSEVENT_WAN_STATUS, WAN_STATUS_STOPPED, 0);
         sysevent_set(sysevent_fd, sysevent_token, SYSEVENT_WAN_SERVICE_STATUS, WAN_STATUS_STOPPED, 0);
@@ -1973,6 +2008,12 @@ static eWanState_t wan_transition_physical_interface_down(WanMgr_IfaceSM_Control
         wan_transition_mapt_down(pWanIfaceCtrl);
     }
 #endif
+#ifdef DSLITE_FEATURE_SUPPORT_V2
+    if(p_VirtIf->DSLite.Status == WAN_IFACE_DSLITE_STATE_UP)
+    {
+        wan_transition_dslite_down(pWanIfaceCtrl);
+    }
+#endif
 
     if(p_VirtIf->IP.Ipv4Status == WAN_IFACE_IPV4_STATE_UP)
     {
@@ -2090,13 +2131,15 @@ static eWanState_t wan_transition_wan_validated(WanMgr_IfaceSM_Controller_t* pWa
     p_VirtIf->IP.Ipv4ConnectivityStatus = WAN_CONNECTIVITY_UP;
     p_VirtIf->IP.Ipv6ConnectivityStatus = WAN_CONNECTIVITY_UP;
 
-    if(p_VirtIf->IP.SelectedMode == MAPT_MODE && p_VirtIf->IP.SelectedModeTimerStatus != EXPIRED)
+    if ((p_VirtIf->IP.SelectedMode == MAPT_MODE || p_VirtIf->IP.SelectedMode == DSLITE_MODE) &&
+        p_VirtIf->IP.SelectedModeTimerStatus != EXPIRED)
     {
-        /* Start all interface with accept ra disbaled */
+        /* Start all interface with accept ra disabled */
         WanMgr_Configure_accept_ra(p_VirtIf, FALSE);
         /* Start DHCPv6 Client */
         WanManager_StartDhcpv6Client(p_VirtIf, pInterface->IfaceType);
-        CcspTraceInfo(("%s %d - MAPT_MODE preferred \n", __FUNCTION__, __LINE__));
+        CcspTraceInfo(("%s %d - %s_MODE preferred \n", __FUNCTION__, __LINE__,
+                       p_VirtIf->IP.SelectedMode == MAPT_MODE ? "MAPT" : "DSLITE"));
         // clock start
         p_VirtIf->IP.SelectedModeTimerStatus = RUNNING;
         memset(&(p_VirtIf->IP.SelectedModeTimerStart), 0, sizeof(struct timespec));
@@ -2352,11 +2395,13 @@ static eWanState_t wan_transition_ipv4_down(WanMgr_IfaceSM_Controller_t* pWanIfa
     }
     else
     {
-        // start DHCPv4 client if it is not running, MAP-T not configured and PPP Disable scenario.
-        if(p_VirtIf->IP.Dhcp4cStatus != DHCPC_STARTED &&
+        // start DHCPv4 client if it is not running, DSLite and MAP-T not configured and PPP Disable scenario.
+        if (p_VirtIf->IP.Dhcp4cStatus != DHCPC_STARTED &&
             (p_VirtIf->PPP.Enable == FALSE) &&
-            (!(p_VirtIf->EnableMAPT == TRUE && (pInterface->Selection.Status == WAN_IFACE_ACTIVE) && 
-            (p_VirtIf->MAP.MaptStatus == WAN_IFACE_MAPT_STATE_UP))))
+            (!(p_VirtIf->EnableMAPT == TRUE && (pInterface->Selection.Status == WAN_IFACE_ACTIVE) &&
+               (p_VirtIf->MAP.MaptStatus == WAN_IFACE_MAPT_STATE_UP))) &&
+            (!(p_VirtIf->EnableDSLite == TRUE && (pInterface->Selection.Status == WAN_IFACE_ACTIVE) &&
+               (p_VirtIf->MAP.MaptStatus == WAN_IFACE_DSLITE_STATE_UP))))
         {
             WanManager_StartDhcpv4Client(p_VirtIf, pInterface->Name, pInterface->IfaceType);
             CcspTraceInfo(("%s %d - SELFHEAL - Started dhcpc on interface %s\n", __FUNCTION__, __LINE__, p_VirtIf->Name));
@@ -2907,6 +2952,23 @@ static eWanState_t wan_transition_mapt_down(WanMgr_IfaceSM_Controller_t* pWanIfa
 }
 #endif //FEATURE_MAPT
 
+#ifdef DSLITE_FEATURE_SUPPORT_V2
+static eWanState_t wan_transition_dslite_refresh(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl)
+{
+
+    return WAN_STATE_OBTAINING_IP_ADDRESSES;
+}
+
+static eWanState_t wan_transition_dslite_up(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl)
+{
+    return WAN_STATE_DSLITE_ACTIVE;
+}
+
+static eWanState_t wan_transition_dslite_down(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl)
+{
+    return WAN_STATE_IPV6_LEASED;
+}
+#endif
 static eWanState_t wan_transition_configuring_interface(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl)
 {
     CcspTraceInfo(("%s %d \n", __FUNCTION__, __LINE__));
@@ -3050,6 +3112,16 @@ static eWanState_t wan_transition_standby_deconfig_ips(WanMgr_IfaceSM_Controller
         if (WanManager_ResetMAPTConfiguration(pInterface->Name, p_VirtIf->Name) != RETURN_OK)
         {
             CcspTraceError(("%s %d Error resetting MAP-T configuration", __FUNCTION__, __LINE__));
+        }
+    }
+#endif
+#ifdef DSLITE_FEATURE_SUPPORT_V2
+    if (p_VirtIf->DSLite.Status == WAN_IFACE_DSLITE_STATE_UP)
+    {
+        CcspTraceInfo(("%s %d - Deconfiguring DSLite for %s \n", __FUNCTION__, __LINE__, p_VirtIf->Name));
+        if (wan_tearDownDSLite() != RETURN_OK)
+        {
+            CcspTraceError(("%s %d - Failed to tear down DSLite for %s \n", __FUNCTION__, __LINE__, p_VirtIf->Name));
         }
     }
 #endif
@@ -3360,26 +3432,30 @@ static eWanState_t wan_state_obtaining_ip_addresses(WanMgr_IfaceSM_Controller_t*
         return wan_transition_physical_interface_down(pWanIfaceCtrl);
     }
 
-    if(p_VirtIf->IP.SelectedMode == MAPT_MODE)
+    if (p_VirtIf->IP.SelectedMode == MAPT_MODE ||
+        p_VirtIf->IP.SelectedMode == DSLITE_MODE)
     {
-        if(p_VirtIf->MAP.MaptStatus == WAN_IFACE_MAPT_STATE_UP)
+        bool is_mapt = p_VirtIf->IP.SelectedMode == MAPT_MODE;
+        const char *mode_str = is_mapt ? "MAPT" : "DSLITE";
+        bool iface_state_up = is_mapt
+                                  ? (p_VirtIf->MAP.MaptStatus == WAN_IFACE_MAPT_STATE_UP)
+                                  : (p_VirtIf->DSLite.Status == WAN_IFACE_DSLITE_STATE_UP);
+
+        if (iface_state_up)
         {
             p_VirtIf->IP.SelectedModeTimerStatus = COMPLETE;
-            CcspTraceInfo(("%s %d MAPT option recieved in MAPT Preferred Mode - Timer complete \n", __FUNCTION__, __LINE__));
+            CcspTraceInfo(("%s %d %s option received in %s Preferred Mode - Timer complete \n", __FUNCTION__, __LINE__, mode_str, mode_str));
         }
-        else
+        else if (p_VirtIf->IP.SelectedModeTimerStatus == RUNNING)
         {
-            if(p_VirtIf->IP.SelectedModeTimerStatus == RUNNING)
+            if (difftime(CurrentTime.tv_sec, p_VirtIf->IP.SelectedModeTimerStart.tv_sec) > SELECTED_MODE_TIMEOUT_SECONDS ||
+                p_VirtIf->IP.Ipv6Status == WAN_IFACE_IPV6_STATE_UP)
             {
-                if (difftime(CurrentTime.tv_sec, p_VirtIf->IP.SelectedModeTimerStart.tv_sec) > SELECTED_MODE_TIMEOUT_SECONDS ||
-                    p_VirtIf->IP.Ipv6Status == WAN_IFACE_IPV6_STATE_UP)
-                {
-                    p_VirtIf->IP.SelectedModeTimerStatus = EXPIRED;
-                    CcspTraceInfo(("%s %d MAPT option not recieved in MAPT Preferred Mode - Timer Expired \n", __FUNCTION__, __LINE__));
-                    return wan_transition_wan_validated(pWanIfaceCtrl);
-                }
-                return WAN_STATE_OBTAINING_IP_ADDRESSES;
+                p_VirtIf->IP.SelectedModeTimerStatus = EXPIRED;
+                CcspTraceInfo(("%s %d %s option not received in %s Preferred Mode - Timer Expired \n", __FUNCTION__, __LINE__, mode_str, mode_str));
+                return wan_transition_wan_validated(pWanIfaceCtrl);
             }
+            return WAN_STATE_OBTAINING_IP_ADDRESSES;
         }
     }
 
@@ -3480,7 +3556,21 @@ static eWanState_t wan_state_obtaining_ip_addresses(WanMgr_IfaceSM_Controller_t*
         }
     }
 #endif
-
+#if 0 /* TODO DSLITE detect dslite change */
+#ifdef DSLITE_FEATURE_SUPPORT_V2
+    else if (p_VirtIf->EnableDSLite == TRUE &&
+            pInterface->Selection.Status == WAN_IFACE_ACTIVE &&
+            mapt_feature_enable_changed == TRUE &&
+            p_VirtIf->MAP.MaptStatus == WAN_IFACE_DSLITE_STATE_DOWN)
+    {
+        if (TRUE == addvirtif something maybe???())
+        {
+            mapt_feature_enable_changed = FALSE;
+            return wan_transition_mapt_feature_refresh(pWanIfaceCtrl);
+        }
+    }
+#endif
+#endif
     return WAN_STATE_OBTAINING_IP_ADDRESSES;
 }
 
@@ -3655,6 +3745,22 @@ static eWanState_t wan_state_ipv4_leased(WanMgr_IfaceSM_Controller_t* pWanIfaceC
     }
 #endif
 
+#if 0 /* TODO DSLITE detech  dslite enable change */
+#ifdef DSLITE_FEATURE_SUPPORT_V2
+    else if (p_VirtIf->EnableDSLite == TRUE &&
+            pInterface->Selection.Status == WAN_IFACE_ACTIVE &&
+            mapt_feature_enable_changed == TRUE &&
+            p_VirtIf->DSLite.Status == WAN_IFACE_DSLITE_STATE_DOWN)
+    {
+        if (TRUE == wanmanager_mapt_feature())
+        {
+            mapt_feature_enable_changed = FALSE;
+            return wan_transition_dslite_feature_refresh(pWanIfaceCtrl);
+        }
+    }
+#endif
+#endif
+
     return WAN_STATE_IPV4_LEASED;
 }
 
@@ -3759,6 +3865,29 @@ static eWanState_t wan_state_ipv6_leased(WanMgr_IfaceSM_Controller_t* pWanIfaceC
         }
     }
 #endif //FEATURE_MAPT
+#ifdef DSLITE_FEATURE_SUPPORT_V2
+    else if (p_VirtIf->EnableDSLite == TRUE &&
+            pInterface->Selection.Status == WAN_IFACE_ACTIVE &&
+            p_VirtIf->DSLite.Status == WAN_IFACE_DSLITE_STATE_UP)
+    {
+        if (checkIpv6LanAddressIsReadyToUse(p_VirtIf) == RETURN_OK) // Wait for default gateway before DSLite configuration
+        {
+            return wan_transition_dslite_up(pWanIfaceCtrl);
+        } 
+    }
+#if 0 /* TODO DSLITE find a way to detect enable flip */
+    else if (p_VirtIf->EnableDSLite == TRUE &&
+             pInterface->Selection.Status == WAN_IFACE_ACTIVE &&
+             mapt_feature_enable_changed == TRUE &&
+             p_VirtIf->DSLite.Status == WAN_IFACE_DSLITE_STATE_DOWN)
+    {
+        if (TRUE == wanmanager_mapt_feature())
+        {
+            mapt_feature_enable_changed = FALSE;
+            return wan_transition_dslite_feature_refresh(pWanIfaceCtrl);
+        }
+    }
+#endif
     else if (p_VirtIf->IP.Ipv6Renewed == TRUE)
     {
         WanMgr_SendMsgTo_ConnectivityCheck(pWanIfaceCtrl, CONNECTION_MSG_IPV6 , TRUE);
@@ -3897,6 +4026,30 @@ static eWanState_t wan_state_dual_stack_active(WanMgr_IfaceSM_Controller_t* pWan
         }
     }
 #endif //FEATURE_MAPT
+#ifdef DSLITE_FEATURE_SUPPORT_V2
+    else if (p_VirtIf->EnableDSLite == TRUE &&
+             pInterface->Selection.Status == WAN_IFACE_ACTIVE &&
+             p_VirtIf->DSLite.Status == WAN_IFACE_DSLITE_STATE_UP)
+    {
+        if (checkIpv6LanAddressIsReadyToUse(p_VirtIf) == RETURN_OK) // Wait for default gateway before MAP-T configuration
+        {
+            return wan_transition_dslite_up(pWanIfaceCtrl);
+        }
+    }
+#if 0 /* TODO DSLITE find a way to detect enable flip */
+    else if (p_VirtIf->EnableDSLite == TRUE &&
+            pInterface->Selection.Status == WAN_IFACE_ACTIVE &&
+            mapt_feature_enable_changed == TRUE &&
+            p_VirtIf->DSLite.Status == WAN_IFACE_DSLITE_STATE_DOWN)
+    {
+        if (TRUE == wanmanager_mapt_feature())
+        {
+            mapt_feature_enable_changed = FALSE;
+            return wan_transition_dslite_feature_refresh(pWanIfaceCtrl);
+        }
+    }
+#endif
+#endif // DSLITE_FEATURE_SUPPORT_V2
     else if (p_VirtIf->IP.Ipv4Renewed == TRUE)
     {
         WanMgr_SendMsgTo_ConnectivityCheck(pWanIfaceCtrl, CONNECTION_MSG_IPV4 , TRUE);
@@ -4072,6 +4225,13 @@ static eWanState_t wan_state_mapt_active(WanMgr_IfaceSM_Controller_t* pWanIfaceC
     return WAN_STATE_MAPT_ACTIVE;
 }
 #endif //FEATURE_MAPT
+
+#ifdef DSLITE_FEATURE_SUPPORT_V2
+static eWanState_t wan_state_dslite_active(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl)
+{
+
+}
+#endif // DSLITE_FEATURE_SUPPORT_V2
 
 static eWanState_t wan_state_refreshing_wan(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl)
 {
@@ -4352,6 +4512,13 @@ static void* WanMgr_InterfaceSMThread( void *arg )
                     break;
                 }
 #endif //FEATURE_MAPT
+#ifdef DSLITE_FEATURE_SUPPORT_V2
+            case WAN_STATE_DSLITE_ACTIVE:
+                {
+                    iface_sm_state = wan_state_dslite_active(pWanIfaceCtrl);
+                    break;
+                }
+#endif //DSLITE_FEATURE_SUPPORT_V2
             case WAN_STATE_REFRESHING_WAN:
                 {
                     iface_sm_state = wan_state_refreshing_wan(pWanIfaceCtrl);
