@@ -1636,19 +1636,43 @@ static int wan_tearDownDSLite(WanMgr_IfaceSM_Controller_t *pWanIfaceCtrl)
     DML_WAN_IFACE *pInterface = pWanIfaceCtrl->pIfaceData;
     DML_VIRTUAL_IFACE *p_VirtIf = WanMgr_getVirtualIfaceById(pInterface->VirtIfList, pWanIfaceCtrl->VirIfIdx);
 
-    // call DSLite tunnel setup fn here
+    if (WanMgr_DSLite_TeardownTunnel(p_VirtIf) == ANSC_STATUS_FAILURE)
+    {
+        CcspTraceError(("%s %d - DSLite tunnel teardown failed for interface %s.\n",__FUNCTION__, __LINE__, p_VirtIf->Name));
+        p_VirtIf->DSLite.Status = WAN_IFACE_DSLITE_STATE_ERROR;
+        WanMgr_ProcessTelemetryMarker(p_VirtIf, WAN_ERROR_DSLITE_STATUS_FAILED);
+        return ANSC_STATUS_FAILURE;
+    }
 
-    // todo dslite depending on return, set status
-    p_VirtIf->DSLite.Status = WAN_IFACE_DSLITE_STATE_ERROR;
+    p_VirtIf->DSLite.Status = WAN_IFACE_DSLITE_STATE_DOWN;
     WanMgr_ProcessTelemetryMarker(p_VirtIf, WAN_ERROR_DSLITE_STATUS_DOWN);
     p_VirtIf->DSLite.Status = WAN_IFACE_DSLITE_STATE_DOWN;
 
-    if (p_VirtIf->IP.Mode == DML_WAN_IP_MODE_IPV4_ONLY || p_VirtIf->IP.Mode == DML_WAN_IP_MODE_DUAL_STACK)
+    if (p_VirtIf->IP.Mode == DML_WAN_IP_MODE_IPV6_ONLY)
     {
-        // Enabling IP forwarding
-        CcspTraceInfo(("%s %d - net.ipv4.ip_forward set to 1 \n", __FUNCTION__, __LINE__));
-        v_secure_system("sysctl -w net.ipv4.ip_forward=1");
+        /* IPv6-only mode: disable LAN-to-WAN IPv4 forwarding */
+        if (sysctl_iface_set("/proc/sys/net/ipv4/ip_forward", NULL, "0") != 0)
+        {
+            CcspTraceError(("%s %d - Failure writing to /proc file\n", __FUNCTION__, __LINE__));
+        }
     }
+    else
+    {
+        /* Dual-stack mode: update routing */
+        WanMgr_Dslite_AddIpRules(p_VirtIf->Name);
+
+        // TODO: Check if LAN-side DHCP/DNS/IGMP service restarts are actually required
+#if defined(_LG_OFW_)
+        v_secure_system("/etc/utopia/service.d/service_dhcp_server.sh dhcp_server-stop" "; "
+                        "/etc/utopia/service.d/service_dhcp_server.sh dhcp_server-start" "; "
+                        "/etc/utopia/service.d/service_mcastproxy.sh mcastproxy-restart");
+#else
+        v_secure_system("systemctl stop dnsmasq.service" "; "
+                        "systemctl start dnsmasq.service" "; "
+                        "/etc/utopia/service.d/service_mcastproxy.sh mcastproxy-restart");
+#endif
+    }
+
     return RETURN_OK;
 }
 
@@ -1663,18 +1687,40 @@ static int wan_setUpDSLite(WanMgr_IfaceSM_Controller_t *pWanIfaceCtrl)
     DML_WAN_IFACE *pInterface = pWanIfaceCtrl->pIfaceData;
     DML_VIRTUAL_IFACE *p_VirtIf = WanMgr_getVirtualIfaceById(pInterface->VirtIfList, pWanIfaceCtrl->VirIfIdx);
 
-    // call DSLite tunnel setup fn here
+    if (WanMgr_DSLite_SetupTunnel(p_VirtIf) == ANSC_STATUS_FAILURE)
+    {
+        CcspTraceError(("%s %d - DSLite tunnel setup failed for interface %s.\n", __FUNCTION__, __LINE__, p_VirtIf->Name));
+        p_VirtIf->DSLite.Status = WAN_IFACE_DSLITE_STATE_ERROR;
+        WanMgr_ProcessTelemetryMarker(p_VirtIf, WAN_ERROR_DSLITE_STATUS_FAILED);
 
-    // todo dslite depending on return, set status
-    p_VirtIf->DSLite.Status = WAN_IFACE_DSLITE_STATE_ERROR;
-    WanMgr_ProcessTelemetryMarker(p_VirtIf, WAN_INFO_DSLITE_STATUS_UP);
+        return ANSC_STATUS_FAILURE;
+    }
+
     p_VirtIf->DSLite.Status = WAN_IFACE_DSLITE_STATE_UP;
+    WanMgr_ProcessTelemetryMarker(p_VirtIf, WAN_INFO_DSLITE_STATUS_UP);
 
+    wanmgr_restart_zebra();
+
+    // IPv6 only mode, we need to start the LAN to WAN IPv4 function
     if (p_VirtIf->IP.Mode == DML_WAN_IP_MODE_IPV6_ONLY)
     {
-        // Disabling IP forwarding
-        CcspTraceInfo(("%s %d - net.ipv4.ip_forward set to 0 \n", __FUNCTION__, __LINE__));
-        v_secure_system("sysctl -w net.ipv4.ip_forward=0");
+        if (sysctl_iface_set ("/proc/sys/net/ipv4/ip_forward", NULL, "1") != 0)
+        {
+            CcspTraceError(("%s %d - Failure writing to /proc file\n", __FUNCTION__, __LINE__));
+        }
+    }
+    else
+    {
+       // TODO: Check if LAN-side DHCP/DNS/IGMP service restarts are actually required
+#if defined(_LG_OFW_)
+        v_secure_system ("/etc/utopia/service.d/service_dhcp_server.sh dhcp_server-stop" "; "
+                "/etc/utopia/service.d/service_dhcp_server.sh dhcp_server-start" "; "
+                "/etc/utopia/service.d/service_mcastproxy.sh mcastproxy-restart");
+#else
+        v_secure_system ("systemctl stop dnsmasq.service" "; "
+                "systemctl start dnsmasq.service" "; "
+                "/etc/utopia/service.d/service_mcastproxy.sh mcastproxy-restart");
+#endif
     }
     return RETURN_OK;
 }

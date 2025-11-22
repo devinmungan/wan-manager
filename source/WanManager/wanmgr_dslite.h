@@ -52,8 +52,14 @@
         (__pCfg)->TcpMss = 1420;                        \
     } while (0)
 
-VOID WanMgr_DSLite_UpdateEndPointName(DML_VIRTUAL_IFACE* pVirtIf, const char* newEndpoint);
-BOOL WanMgr_DSLite_isEndpointAssigned(DML_VIRTUAL_IFACE* pVirtIf);
-BOOL WanMgr_DSLite_isEndpointNameChanged(DML_VIRTUAL_IFACE* pVirtIf, const char* newFqdn);
+void WanMgr_DSLite_UpdateEndPointName(DML_VIRTUAL_IFACE* pVirtIf, const char* newEndpoint);
+bool WanMgr_DSLite_isEndpointAssigned(DML_VIRTUAL_IFACE* pVirtIf);
+bool WanMgr_DSLite_isEndpointNameChanged(DML_VIRTUAL_IFACE* pVirtIf, const char* newFqdn);
 ANSC_STATUS WanMgr_DSLiteInit(void);
+ANSC_STATUS WanMgr_DSLite_SetupTunnel(DML_VIRTUAL_IFACE *pVirtIf);
+ANSC_STATUS WanMgr_DSLite_TeardownTunnel(DML_VIRTUAL_IFACE *pVirtIf);
+ANSC_STATUS WanMgr_DSLite_Refresh(DML_VIRTUAL_IFACE *pVirtIf);
+void WanMgr_Dslite_AddIpRules(const char *if_name);
+void WanMgr_Dslite_DelIpRules(const char *if_name, const char *wan_ipv4);
+
 #endif /* _WANMGR_DSLITE_H_ */
