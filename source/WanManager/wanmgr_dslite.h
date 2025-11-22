@@ -53,4 +53,8 @@
     } while (0)
 
 ANSC_STATUS WanMgr_DSLiteInit(void);
+ANSC_STATUS WanMgr_DSLite_SetupTunnel(DML_VIRTUAL_IFACE *pVirtIf);
+ANSC_STATUS WanMgr_DSLite_TeardownTunnel(DML_VIRTUAL_IFACE *pVirtIf);
+ANSC_STATUS WanMgr_DSLite_Refresh(DML_VIRTUAL_IFACE *pVirtIf);
+
 #endif /* _WANMGR_DSLITE_H_ */
