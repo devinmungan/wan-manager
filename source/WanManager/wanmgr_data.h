@@ -95,6 +95,7 @@ ANSC_STATUS WanMgr_DSLite_DelFromList(UINT inst);
 ANSC_STATUS WanMgr_DSLite_AddToList(UINT inst);
 DML_DSLITE_LIST *WanMgr_getDSLiteEntryByInstance_locked(UINT inst);
 DML_DSLITE_LIST *WanMgr_getDSLiteEntryByIdx_locked(UINT idx);
+DML_DSLITE_LIST *WanMgr_getDSLiteEntryByAlias_locked(char *Alias);
 WanMgr_DSLite_Data_t* WanMgr_GetDSLiteData_locked(void);
 void WanMgr_GetDSLiteData_release(void);
 ANSC_STATUS WanMgr_DSLite_WriteDSLiteCfgToSyscfg(void);

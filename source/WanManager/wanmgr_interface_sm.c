@@ -43,6 +43,7 @@
 #define IF_SIZE      32
 #define LOOP_TIMEOUT 50000 // timeout in microseconds. This is the state machine loop interval
 #define RESOLV_CONF_FILE "/etc/resolv.conf"
+#define RESOLV_CONF_TMP "/tmp/resolv_tmp.conf"
 #define LOOPBACK "127.0.0.1"
 
 #ifdef FEATURE_IPOE_HEALTH_CHECK
@@ -961,6 +962,81 @@ int wan_updateDNS(WanMgr_IfaceSM_Controller_t* pWanIfaceCtrl, BOOL addIPv4, BOOL
 
     if(resolv_conf_changed)
     {
+        char staticdns_enable[8] = {0};
+        syscfg_get(NULL, "staticdns_enable", staticdns_enable, sizeof(staticdns_enable));
+
+        if (strcmp(staticdns_enable, "1") == 0)
+        {
+            CcspTraceInfo(("%s %d: staticdns_enable=1, using only static DNS configuration\n", __FUNCTION__, __LINE__));
+
+            /* 1. Clean existing resolv.conf */
+            FILE *fp_old = fopen(RESOLV_CONF_FILE, "r");
+            FILE *fp_new = fopen(RESOLV_CONF_TMP, "w+");
+
+            if (fp_old && fp_new)
+            {
+                char line[256] = {0};
+                while (fgets(line, sizeof(line), fp_old))
+                {
+                    /* Remove existing domain entry */
+                    if (strstr(line, "domain") == line)
+                        continue;
+
+                    /* Remove all IPv4 nameserver entries */
+                    if (strstr(line, "nameserver"))
+                    {
+                        int a, b, c, d;
+                        if (sscanf(line, "nameserver %d.%d.%d.%d", &a,&b,&c,&d) == 4)
+                            continue;
+                    }
+
+                    fputs(line, fp_new);
+                }
+                fclose(fp_old);
+                fclose(fp_new);
+                rename(RESOLV_CONF_TMP, RESOLV_CONF_FILE);
+            }
+
+            /* 2. Append static DNS values */
+            char wan_domain[128] = {0};
+            char nameserver1[64] = {0};
+            char nameserver2[64] = {0};
+            char nameserver3[64] = {0};
+
+            syscfg_get(NULL, "wan_domain", wan_domain, sizeof(wan_domain));
+            syscfg_get(NULL, "nameserver1", nameserver1, sizeof(nameserver1));
+            syscfg_get(NULL, "nameserver2", nameserver2, sizeof(nameserver2));
+            syscfg_get(NULL, "nameserver3", nameserver3, sizeof(nameserver3));
+
+            FILE *fp_append = fopen(RESOLV_CONF_FILE, "a");
+            if (fp_append)
+            {
+                if (wan_domain[0] != '\0')
+                    fprintf(fp_append, "search %s\n", wan_domain);
+
+                if (nameserver1[0] != '\0' && strcmp(nameserver1, "0.0.0.0") != 0)
+                    fprintf(fp_append, "nameserver %s\n", nameserver1);
+
+                if (nameserver2[0] != '\0' && strcmp(nameserver2, "0.0.0.0") != 0)
+                    fprintf(fp_append, "nameserver %s\n", nameserver2);
+
+                if (nameserver3[0] != '\0' && strcmp(nameserver3, "0.0.0.0") != 0)
+                    fprintf(fp_append, "nameserver %s\n", nameserver3);
+
+                fclose(fp_append);
+            }
+
+            /* 3. Update wan_dhcp_dns sysevent */
+            char wandns[256] = {0};
+            snprintf(wandns, sizeof(wandns), "%s %s %s",
+                    nameserver1, nameserver2, nameserver3);
+
+            sysevent_set(sysevent_fd, sysevent_token, "wan_dhcp_dns", wandns, 0);
+
+            /* 4. Start DHCP server instead of restart (to honor active users) */
+            sysevent_set(sysevent_fd, sysevent_token, "dhcp_server-start", NULL, 0);
+        }
+
 #if (defined (_XB6_PRODUCT_REQ_) || defined (_CBR2_PRODUCT_REQ_))
         //TODO: this is a workaround for the devices using the primary DNS for the backup interfaces. CurrentActiveDNS may not have the right value. 
         WanMgr_Config_Data_t*   pWanConfigData = WanMgr_GetConfigData_locked();

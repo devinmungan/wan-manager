@@ -151,21 +151,6 @@ ANSC_STATUS WanMgr_DSLiteInit(void)
     return ret;
 }
 
-static void _get_shell_output(FILE *fp, char *buf, size_t len)
-{
-    if (len > 0)
-        buf[0] = 0;
-
-    buf = fgets(buf, len, fp);
-
-    if ((len > 0) && (buf != NULL))
-    {
-        len = strlen(buf);
-        if ((len > 0) && (buf[len - 1] == '\n'))
-            buf[len - 1] = 0;
-    }
-}
-
 static void restart_zebra (void)
 {
     FILE *zebra_pid_fd;
@@ -205,6 +190,7 @@ static void restart_zebra (void)
         sysevent_set(sysevent_fd, sysevent_token, "zebra-restart", "", 0);
     }
 }
+
 static void WanMgr_RouteConfig(const char *if_name)
 {
     char cmd[256];
@@ -220,7 +206,6 @@ static void WanMgr_RouteConfig(const char *if_name)
 
     WanManager_DoSystemAction("WanMgr_RouteConfig:", cmd);
 }
-
 
 static void WanMgr_RouteDeconfig(const char *if_name)
 {
@@ -260,42 +245,93 @@ static void WanMgr_RouteDeconfig(const char *if_name)
     WanManager_DoSystemAction("WanMgr_RouteDeconfig:", cmd);
 }
 
-static int dslite_get_instance_from_path(const char *path, UINT *inst_out)
+ANSC_STATUS WanMgr_DSLite_AddFirewallRules(UINT inst, const char *tunnelIf, const DML_DSLITE_CONFIG *cfg)
 {
-    char         tmp[256];
-    size_t       len;
-    char        *last;
-    const char  *numstr;
-    char        *endptr;
-    long         idx;
-
-    if (!path || !inst_out)
-        return -1;
-
-    memset(tmp, 0, sizeof(tmp));
-    strncpy(tmp, path, sizeof(tmp) - 1);
-
-    len = strlen(tmp);
-    while (len > 0 && tmp[len - 1] == '.')
+    if (!tunnelIf || !cfg)
     {
-        tmp[len - 1] = '\0';
-        --len;
+        return ANSC_STATUS_FAILURE;
     }
 
-    if (len == 0)
-        return -1;
+    CcspTraceInfo(("%s: Adding DSLite firewall rules for tunnel %s (inst %u)\n", __FUNCTION__, tunnelIf, inst));
 
-    last   = strrchr(tmp, '.');
-    numstr = last ? last + 1 : tmp;
-    if (!numstr || *numstr == '\0')
-        return -1;
+    char rule[256];
+    char retbuf[256];
+    char key[64];
 
-    idx = strtol(numstr, &endptr, 10);
-    if (endptr == numstr || idx <= 0)
-        return -1;
+    memset(retbuf, 0, sizeof(retbuf));
+    snprintf(rule, sizeof(rule), "-I FORWARD -o %s -j ACCEPT\n", tunnelIf);
 
-    *inst_out = (UINT)idx;
-    return 0;
+    sysevent_set_unique(sysevent_fd, sysevent_token, "GeneralPurposeFirewallRule", rule, retbuf, sizeof(retbuf));
+
+    snprintf(key, sizeof(key), "dslite_rule_sysevent_id_%u_1", inst);
+    sysevent_set(sysevent_fd, sysevent_token, key, retbuf, 0);
+
+
+    memset(retbuf, 0, sizeof(retbuf));
+    snprintf(rule, sizeof(rule), "-I FORWARD -i %s -j ACCEPT\n", tunnelIf);
+
+    sysevent_set_unique(sysevent_fd, sysevent_token, "GeneralPurposeFirewallRule", rule, retbuf, sizeof(retbuf));
+
+    snprintf(key, sizeof(key), "dslite_rule_sysevent_id_%u_2", inst);
+    sysevent_set(sysevent_fd, sysevent_token, key, retbuf, 0);
+
+    if (cfg->MssClampingEnable)
+    {
+        char rule_mss_out[256];
+        char rule_mss_in[256];
+
+        if ((cfg->TcpMss > 0) && (cfg->TcpMss <= 1460))
+        {
+            snprintf(rule_mss_out, sizeof(rule_mss_out), "-I FORWARD -o %s -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss %lu\n", tunnelIf, cfg->TcpMss);
+            snprintf(rule_mss_in, sizeof(rule_mss_in), "-I FORWARD -i %s -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss %lu\n", tunnelIf, cfg->TcpMss);
+        }
+        else
+        {
+            snprintf(rule_mss_out, sizeof(rule_mss_out), "-I FORWARD -o %s -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu\n", tunnelIf);
+            snprintf(rule_mss_in, sizeof(rule_mss_in), "-I FORWARD -i %s -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu\n", tunnelIf);
+        }
+
+        /* Apply MSS outbound rule */
+        memset(retbuf, 0, sizeof(retbuf));
+        sysevent_set_unique(sysevent_fd, sysevent_token, "GeneralPurposeMangleRule", rule_mss_out, retbuf, sizeof(retbuf));
+
+        snprintf(key, sizeof(key), "dslite_rule_sysevent_id_%u_3", inst);
+        sysevent_set(sysevent_fd, sysevent_token, key, retbuf, 0);
+
+        /* Apply MSS inbound rule */
+        memset(retbuf, 0, sizeof(retbuf));
+        sysevent_set_unique(sysevent_fd, sysevent_token, "GeneralPurposeMangleRule", rule_mss_in, retbuf, sizeof(retbuf));
+
+        snprintf(key, sizeof(key), "dslite_rule_sysevent_id_%u_4", inst);
+        sysevent_set(sysevent_fd, sysevent_token, key, retbuf, 0);
+    }
+
+    return ANSC_STATUS_SUCCESS;
+}
+
+ANSC_STATUS WanMgr_DSLite_DeleteFirewallRules(UINT inst)
+{
+    CcspTraceInfo(("%s: Removing DSLite firewall rules (inst %u)\n", __FUNCTION__, inst));
+
+    char key[64];
+    char rule_id[64];
+
+    for (int i = 1; i <= 4; i++)
+    {
+        snprintf(key, sizeof(key), "dslite_rule_sysevent_id_%u_%d", inst, i);
+
+        memset(rule_id, 0, sizeof(rule_id));
+        sysevent_get(sysevent_fd, sysevent_token, key, rule_id, sizeof(rule_id));
+
+        if (rule_id[0] != '\0')
+        {
+            sysevent_set(sysevent_fd, sysevent_token, rule_id, "", 0);
+
+            sysevent_set(sysevent_fd, sysevent_token, key, "", 0);
+        }
+    }
+
+    return ANSC_STATUS_SUCCESS;
 }
 
 /* AFTR selection based on DML config (Mode/Type) */
@@ -312,11 +348,11 @@ static int WanMgr_DSLite_GetAFTR(const DML_DSLITE_CONFIG *cfg, UINT inst, char *
 
     aftrBuf[0] = '\0';
 
-    /* DHCPv6 mode: AFTR comes from sysevent */
+    /* DHCPv6 mode: AFTR comes from DHCPMngr */
     if (cfg->Mode == DSLITE_ENDPOINT_DHCPV6)
     {
 
-        // TBD: Currently, we are getting AFTR from sysevent. Do we need to continue doing it this way? If yes, what should the sysevent name be?
+        // TODO: To be changed after DHCP manager changes.
         sysevent_get(sysevent_fd, sysevent_token, "dslite_dhcpv6_endpointname", tmp, sizeof(tmp));
 
         if (tmp[0] == '\0')
@@ -462,7 +498,6 @@ ANSC_STATUS WanMgr_DSLite_SetupTunnel(DML_VIRTUAL_IFACE *pVirtIf)
     DML_DSLITE_CONFIG  *cfg   = NULL;
 
     char                aftr_buf[256]       = {0};
-    char                tnl_v4_addr[64]     = {0};
     char                resolved_aftr[256]  = {0};
     struct in6_addr     tmpv6;
     struct in6_addr    *addrp   = NULL;
@@ -484,12 +519,15 @@ ANSC_STATUS WanMgr_DSLite_SetupTunnel(DML_VIRTUAL_IFACE *pVirtIf)
         return ANSC_STATUS_SUCCESS;
     }
 
-    //TBD: Is this the right way to get the instance number?
-    if (dslite_get_instance_from_path(pVirtIf->DSLite.Path, &inst) != 0)
+    entry = WanMgr_getDSLiteCfgByAlias_locked(pVirtIf->DSLite.Path);
+    if (entry == NULL)
     {
-        CcspTraceError(("%s: Failed to get DSLite instance for path %s\n", __FUNCTION__, pVirtIf->DSLite.Path));
+        CcspTraceError(("%s: DSLite entry not found for Alias %s\n", __FUNCTION__, pVirtIf->DSLite.Path));
         return ANSC_STATUS_FAILURE;
     }
+
+    cfg = &entry->CurrCfg;
+    inst = entry->InstanceNumber;
 
     snprintf(status_key, sizeof(status_key), "dslite_service-status_%u", inst);
     sysevent_set(sysevent_fd, sysevent_token, status_key, "starting", 0);
@@ -515,27 +553,9 @@ ANSC_STATUS WanMgr_DSLite_SetupTunnel(DML_VIRTUAL_IFACE *pVirtIf)
         return ANSC_STATUS_FAILURE;
     }
 
-    entry = WanMgr_getDSLiteCfgByInstance_locked(inst);
-    if (!entry)
-    {
-        sysevent_set(sysevent_fd, sysevent_token, status_key, "error", 0);
-        return ANSC_STATUS_FAILURE;
-    }
-
-    cfg = &entry->CurrCfg;
-
     /* Get AFTR Mode & Address */
     mode = WanMgr_DSLite_GetAFTR(cfg, inst, aftr_buf, sizeof(aftr_buf));
     CcspTraceInfo(("%s: AFTR mode=%d, AFTR buffer=%s\n", __FUNCTION__, mode, aftr_buf));
-
-    /* Copy TunnelV4Addr to local variable */
-    if (cfg->TunnelV4Addr[0] != '\0')
-    {
-        strncpy(tnl_v4_addr, cfg->TunnelV4Addr, sizeof(tnl_v4_addr) - 1);
-    }
-
-    WanMgr_GetDSLiteData_release();
-
     if (mode < 0)
     {
         sysevent_set(sysevent_fd, sysevent_token, status_key, "error", 0);
@@ -554,8 +574,8 @@ ANSC_STATUS WanMgr_DSLite_SetupTunnel(DML_VIRTUAL_IFACE *pVirtIf)
     /* Resolve AFTR FQDN to IP */
     if (inet_pton(AF_INET6, aftr_buf, &tmpv6) == 1)
     {
-        CcspTraceInfo(("%s: AFTR address is already IPv6 literal: %s\n", __FUNCTION__, resolved_aftr));
         strncpy(resolved_aftr, aftr_buf, sizeof(resolved_aftr) - 1);
+        CcspTraceInfo(("%s: AFTR address is already IPv6 literal: %s\n", __FUNCTION__, resolved_aftr));
     }
     else
     {
@@ -569,12 +589,17 @@ ANSC_STATUS WanMgr_DSLite_SetupTunnel(DML_VIRTUAL_IFACE *pVirtIf)
             {
                 inet_ntop(AF_INET6, addrp, resolved_aftr, sizeof(resolved_aftr));
                 free(addrp);
+                CcspTraceInfo(("%s: Successfully resolved using DNS %s, DNS TTL = %d\n", __FUNCTION__, dns_list[i], dns_ttl));
+
+                /* Print time of resolution */
+                time_t now = time(NULL);
+                CcspTraceInfo(("%s: DNS resolution time = %lu\n", __FUNCTION__, now));
             }
         }
 
         if (resolved_aftr[0] == '\0' || strcmp(resolved_aftr, "::") == 0)
         {
-            CcspTraceError(("%s: Unable to resolve AFTR FQDN\n", __FUNCTION__));
+            CcspTraceError(("%s: Unable to resolve AFTR FQDN '%s' for inst=%u\n", __FUNCTION__, aftr_buf, inst));
             sysevent_set(sysevent_fd, sysevent_token, status_key, "dns_error", 0);
             return ANSC_STATUS_FAILURE;
         }
@@ -582,16 +607,15 @@ ANSC_STATUS WanMgr_DSLite_SetupTunnel(DML_VIRTUAL_IFACE *pVirtIf)
 
     CcspTraceInfo(("%s: AFTR resolved to %s\n", __FUNCTION__, resolved_aftr));
     WanMgr_RouteDeconfig(pVirtIf->Name);
-    //TO DO: Do we really need to stop the V4 client?
-    WanManager_StopDhcpv4Client(pVirtIf, STOP_DHCP_WITH_RELEASE);
+
+    // WanManager_StopDhcpv4Client(pVirtIf, STOP_DHCP_WITH_RELEASE);
 
     sysevent_set(sysevent_fd, sysevent_token, "current_wan_ipaddr", "0.0.0.0", 0);
 
     /* Create tunnel interface */
     rc = v_secure_system(
         "ip -6 tunnel add %s mode ip4ip6 remote %s local %s dev %s encaplimit none tos inherit",
-        tunnelIf, resolved_aftr, wan6_addr, pVirtIf->Name
-    );
+        tunnelIf, resolved_aftr, wan6_addr, pVirtIf->Name);
 
     if (rc != 0)
     {
@@ -603,8 +627,8 @@ ANSC_STATUS WanMgr_DSLite_SetupTunnel(DML_VIRTUAL_IFACE *pVirtIf)
     /* Enable IPv6 Autoconf */
     sysctl_iface_set("/proc/sys/net/ipv6/conf/%s/autoconf", tunnelIf, "1");
 
-    /* Configure Addresses (Using tnl_v4_addr) */
-    if (tnl_v4_addr[0] != '\0')
+    /* Configure Addresses */
+    if (cfg->TunnelV4Addr[0] != '\0')
     {
         v_secure_system("ip link set dev %s txqueuelen 1000 up; "
                         "ip -6 addr add %s dev %s; "
@@ -612,7 +636,7 @@ ANSC_STATUS WanMgr_DSLite_SetupTunnel(DML_VIRTUAL_IFACE *pVirtIf)
                         "ip -4 addr flush %s",
                         tunnelIf,
                         tnl_ipv6, tunnelIf,
-                        tnl_v4_addr, tunnelIf, /* Safe: using local stack copy */
+                        cfg->TunnelV4Addr, tunnelIf,
                         pVirtIf->Name);
     }
     else
@@ -629,7 +653,8 @@ ANSC_STATUS WanMgr_DSLite_SetupTunnel(DML_VIRTUAL_IFACE *pVirtIf)
     v_secure_system("ip route add default dev %s table erouter", tunnelIf);
     v_secure_system("ip route add default dev %s table 14", tunnelIf);
 
-    // IPv6 only mode, we need to start the LAN to WAN IPv4 function
+    // TODO: Move this logic after iface state-machine changes.
+    /* IPv6 only mode, we need to start the LAN to WAN IPv4 function */
     if (pVirtIf->IP.Mode == DML_WAN_IP_MODE_IPV6_ONLY)
     {
         sysctl_iface_set ("/proc/sys/net/ipv4/ip_forward", NULL, "1");
@@ -648,62 +673,9 @@ ANSC_STATUS WanMgr_DSLite_SetupTunnel(DML_VIRTUAL_IFACE *pVirtIf)
 #endif
     }
 
-    entry = WanMgr_getDSLiteCfgByInstance_locked(inst);
-    if (!entry)
+    if (WanMgr_DSLite_AddFirewallRules(inst, tunnelIf, cfg) != ANSC_STATUS_SUCCESS)
     {
-        sysevent_set(sysevent_fd, sysevent_token, status_key, "error", 0);
-        return ANSC_STATUS_FAILURE;
-    }
-
-    cfg = &entry->CurrCfg;
-
-    /* Firewall rules for DSLite tunnel interface */
-    {
-        CcspTraceInfo(("%s: Adding firewall rules for tunnel %s\n", __FUNCTION__, tunnelIf));
-        char fw_rule[256];
-        char fw_retbuf[256];
-        char fw_id_key[64];
-        char rule_mss[256] = {0};
-        char rule_mss2[256] = {0};
-        char return_buffer[256] = {0};
-        memset(fw_retbuf, 0, sizeof(fw_retbuf));
-        snprintf(fw_rule, sizeof(fw_rule), "-I FORWARD -o %s -j ACCEPT\n", tunnelIf);
-        sysevent_set_unique(sysevent_fd, sysevent_token, "GeneralPurposeFirewallRule", fw_rule, fw_retbuf, sizeof(fw_retbuf));
-
-        snprintf(fw_id_key, sizeof(fw_id_key), "dslite_rule_sysevent_id_%u_1", inst);
-        sysevent_set(sysevent_fd, sysevent_token, fw_id_key, fw_retbuf, 0);
-
-        memset(fw_retbuf, 0, sizeof(fw_retbuf));
-        snprintf(fw_rule, sizeof(fw_rule), "-I FORWARD -i %s -j ACCEPT\n", tunnelIf);
-        sysevent_set_unique(sysevent_fd, sysevent_token, "GeneralPurposeFirewallRule", fw_rule, fw_retbuf, sizeof(fw_retbuf));
-
-        snprintf(fw_id_key, sizeof(fw_id_key), "dslite_rule_sysevent_id_%u_2", inst);
-        sysevent_set(sysevent_fd, sysevent_token, fw_id_key, fw_retbuf, 0);
-        if (cfg->MssClampingEnable)
-        {
-            if (cfg->TcpMss <= 1460 && cfg->TcpMss > 0)
-            {
-                snprintf(rule_mss, sizeof(rule_mss), "-I FORWARD -o %s -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss %lu\n", tunnelIf, cfg->TcpMss);
-                snprintf(rule_mss2, sizeof(rule_mss2), "-I FORWARD -i %s -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss %lu\n", tunnelIf, cfg->TcpMss);
-            }
-            else
-            {
-                snprintf(rule_mss, sizeof(rule_mss), "-I FORWARD -o %s -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu\n", tunnelIf);
-                snprintf(rule_mss2, sizeof(rule_mss2), "-I FORWARD -i %s -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu\n", tunnelIf);
-            }
-
-            memset(return_buffer, 0, sizeof(return_buffer));
-            sysevent_set_unique(sysevent_fd, sysevent_token, "GeneralPurposeMangleRule", rule_mss, return_buffer, sizeof(return_buffer));
-
-            snprintf(fw_id_key, sizeof(fw_id_key), "dslite_rule_sysevent_id_%u_3", inst);
-            sysevent_set(sysevent_fd, sysevent_token, fw_id_key, return_buffer, 0);
-
-            memset(return_buffer, 0, sizeof(return_buffer));
-            sysevent_set_unique(sysevent_fd, sysevent_token, "GeneralPurposeMangleRule", rule_mss2, return_buffer, sizeof(return_buffer));
-
-            snprintf(fw_id_key, sizeof(fw_id_key), "dslite_rule_sysevent_id_%u_4", inst);
-            sysevent_set(sysevent_fd, sysevent_token, fw_id_key, return_buffer, 0);
-        }
+        CcspTraceError(("%s: Failed to delete DSLite firewall rules for inst %u\n", __FUNCTION__, inst));
     }
 
     strncpy(cfg->AddrInUse, resolved_aftr, sizeof(cfg->AddrInUse) - 1);
@@ -744,16 +716,19 @@ ANSC_STATUS WanMgr_DSLite_TeardownTunnel(DML_VIRTUAL_IFACE *pVirtIf)
 
     if (pVirtIf->DSLite.Status == WAN_IFACE_DSLITE_STATE_DOWN)
     {
-         CcspTraceInfo(("%s: Already DOWN, nothing to tear down\n", __FUNCTION__));
+        CcspTraceInfo(("%s: Already DOWN, nothing to tear down\n", __FUNCTION__));
         return ANSC_STATUS_SUCCESS;
     }
 
-    //TBD: Is this the right way to get the instance number?
-    if (dslite_get_instance_from_path(pVirtIf->DSLite.Path, &inst) != 0)
+    entry = WanMgr_getDSLiteCfgByAlias_locked(pVirtIf->DSLite.Path);
+    if (entry == NULL)
     {
-        CcspTraceError(("%s: Failed to get instance from path %s\n", __FUNCTION__, pVirtIf->DSLite.Path));
+        CcspTraceError(("%s: DSLite entry not found for Alias %s\n", __FUNCTION__, pVirtIf->DSLite.Path));
         return ANSC_STATUS_FAILURE;
     }
+
+    cfg = &entry->CurrCfg;
+    inst = entry->InstanceNumber;
 
     snprintf(tunnelIf, sizeof(tunnelIf), "ipip6tun%u", (unsigned int)(inst ? inst - 1 : 0));
     snprintf(status_key, sizeof(status_key), "dslite_service-status_%u", inst);
@@ -762,21 +737,19 @@ ANSC_STATUS WanMgr_DSLite_TeardownTunnel(DML_VIRTUAL_IFACE *pVirtIf)
     sysevent_set(sysevent_fd, sysevent_token, status_key, "stopping", 0);
 
     /* Get Remote Address */
-    snprintf(cmd, sizeof(cmd), "ip -6 tunnel show | grep %s | awk '/remote/{print $4}'", tunnelIf);
-    fp = v_secure_popen("r", "%s", cmd);
+    fp = v_secure_popen("r", "ip -6 tunnel show | grep %s | awk '/remote/{print $4}'", tunnelIf);
     if (fp)
     {
-        _get_shell_output(fp, remote_addr, sizeof(remote_addr));
+        WanManager_Util_GetShell_output(fp, remote_addr, sizeof(remote_addr));
         v_secure_pclose(fp);
         CcspTraceInfo(("%s: Remote addr=%s\n", __FUNCTION__, remote_addr));
     }
 
     /* Get Local Address */
-    snprintf(cmd, sizeof(cmd), "ip -6 tunnel show | grep %s | awk '/remote/{print $6}'", tunnelIf);
-    fp = v_secure_popen("r", "%s", cmd);
+    fp = v_secure_popen("r", "ip -6 tunnel show | grep %s | awk '/remote/{print $6}'", tunnelIf);
     if (fp)
     {
-        _get_shell_output(fp, local_addr, sizeof(local_addr));
+        WanManager_Util_GetShell_output(fp, local_addr, sizeof(local_addr));
         v_secure_pclose(fp);
         CcspTraceInfo(("%s: Local addr=%s\n", __FUNCTION__, local_addr));
     }
@@ -786,33 +759,28 @@ ANSC_STATUS WanMgr_DSLite_TeardownTunnel(DML_VIRTUAL_IFACE *pVirtIf)
         CcspTraceInfo(("%s: Removing tunnel \n", __FUNCTION__));
         v_secure_system("ip -6 tunnel del %s mode ip4ip6 remote %s local %s dev %s encaplimit none", tunnelIf, remote_addr, local_addr, pVirtIf->Name);
 
-        /*restart the zebra process if it's exited*/
+        /* zebra process will exit for unknown reason when execute the above tunnel delete operation.
+       This may be a bug of Zebra SW package. But here we make a workaround to restart the zebra process if it's exited */
         restart_zebra();
     }
     else
     {
-        v_secure_system("ip -6 tunnel del %s", tunnelIf);
+        CcspTraceInfo(("%s: tunnel is already deleted for inst %u \n", __FUNCTION__, inst));
     }
 
-    entry = WanMgr_getDSLiteCfgByInstance_locked(inst);
-    if (entry)
-    {
-        cfg = &entry->CurrCfg;
-        cfg->AddrInUse[0] = '\0';
-        cfg->TunnelIface[0]      = '\0';
-        cfg->TunneledIface[0]    = '\0';
-        cfg->Status                  = WAN_IFACE_DSLITE_STATE_DOWN;
+    cfg = &entry->CurrCfg;
+    cfg->AddrInUse[0] = '\0';
+    cfg->TunnelIface[0] = '\0';
+    cfg->TunneledIface[0] = '\0';
+    cfg->Status = WAN_IFACE_DSLITE_STATE_DOWN;
 
-        WanMgr_GetDSLiteData_release();
-        WanMgr_DSLite_WriteEntryCfgToSyscfg(inst);
-    }
+    WanMgr_GetDSLiteData_release();
+    WanMgr_DSLite_WriteEntryCfgToSyscfg(inst);
 
-
+    // TODO: Move this logic after iface state-machine changes.
     if (pVirtIf->IP.Mode != DML_WAN_IP_MODE_IPV6_ONLY)
     {
-        //Start WAN IPv4 service
         WanMgr_RouteConfig(pVirtIf->Name);
-        //TO DO: Do we really need to start the client?
         // WanManager_StartDhcpv4Client(pVirtIf, pVirtIf->Name, 1);
     }
 
@@ -820,7 +788,8 @@ ANSC_STATUS WanMgr_DSLite_TeardownTunnel(DML_VIRTUAL_IFACE *pVirtIf)
     v_secure_system("ip route del default dev %s table erouter", tunnelIf);
     v_secure_system("ip route del default dev %s table 14", tunnelIf);
 
-    // if VIF is the IPv6 only mode, we need to shutdown the LAN to WAN IPv4 function
+    // TODO: Move this logic after iface state-machine changes.
+    /* IPv6 only mode, we need to shutdown the LAN to WAN IPv4 function */
     if (pVirtIf->IP.Mode == DML_WAN_IP_MODE_IPV6_ONLY)
     {
         sysctl_iface_set("/proc/sys/net/ipv4/ip_forward", NULL, "0");
@@ -839,50 +808,9 @@ ANSC_STATUS WanMgr_DSLite_TeardownTunnel(DML_VIRTUAL_IFACE *pVirtIf)
 #endif
     }
 
-    /* Firewall rules for DSLite tunnel interface */
+    if (WanMgr_DSLite_DeleteFirewallRules(inst) != ANSC_STATUS_SUCCESS)
     {
-        char fw_id_key[64];
-        char fw_rule_id[64];
-
-        snprintf(fw_id_key, sizeof(fw_id_key), "dslite_rule_sysevent_id_%u_1", inst);
-        memset(fw_rule_id, 0, sizeof(fw_rule_id));
-        sysevent_get(sysevent_fd, sysevent_token, fw_id_key, fw_rule_id, sizeof(fw_rule_id));
-
-        if (fw_rule_id[0] != '\0')
-        {
-            sysevent_set(sysevent_fd, sysevent_token, fw_rule_id, "", 0);
-            sysevent_set(sysevent_fd, sysevent_token, fw_id_key, "", 0);
-        }
-
-        snprintf(fw_id_key, sizeof(fw_id_key), "dslite_rule_sysevent_id_%u_2", inst);
-        memset(fw_rule_id, 0, sizeof(fw_rule_id));
-        sysevent_get(sysevent_fd, sysevent_token, fw_id_key, fw_rule_id, sizeof(fw_rule_id));
-
-        if (fw_rule_id[0] != '\0')
-        {
-            sysevent_set(sysevent_fd, sysevent_token, fw_rule_id, "", 0);
-            sysevent_set(sysevent_fd, sysevent_token, fw_id_key, "", 0);
-        }
-
-        snprintf(fw_id_key, sizeof(fw_id_key), "dslite_rule_sysevent_id_%u_3", inst);
-        memset(fw_rule_id, 0, sizeof(fw_rule_id));
-        sysevent_get(sysevent_fd, sysevent_token, fw_id_key, fw_rule_id, sizeof(fw_rule_id));
-
-        if (fw_rule_id[0] != '\0')
-        {
-            sysevent_set(sysevent_fd, sysevent_token, fw_rule_id, "", 0);
-            sysevent_set(sysevent_fd, sysevent_token, fw_id_key, "", 0);
-        }
-
-        snprintf(fw_id_key, sizeof(fw_id_key), "dslite_rule_sysevent_id_%u_4", inst);
-        memset(fw_rule_id, 0, sizeof(fw_rule_id));
-        sysevent_get(sysevent_fd, sysevent_token, fw_id_key, fw_rule_id, sizeof(fw_rule_id));
-
-        if (fw_rule_id[0] != '\0')
-        {
-            sysevent_set(sysevent_fd, sysevent_token, fw_rule_id, "", 0);
-            sysevent_set(sysevent_fd, sysevent_token, fw_id_key, "", 0);
-        }
+        CcspTraceError(("%s: Failed to delete DSLite firewall rules for inst %u\n", __FUNCTION__, inst));
     }
 
     v_secure_system("sysevent set firewall-restart; conntrack_flush");

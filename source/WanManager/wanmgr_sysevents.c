@@ -618,6 +618,7 @@ static void *WanManagerSyseventHandler(void *args)
     async_id_t primary_v6ipaddress_asyncid;
 #endif
 #endif
+    async_id_t dns_restart_asyncid;
 
     sysevent_set_options(sysevent_msg_fd, sysevent_msg_token, SYSEVENT_IPV6_TOGGLE, TUPLE_FLAG_EVENT);
     sysevent_setnotification(sysevent_msg_fd, sysevent_msg_token, SYSEVENT_IPV6_TOGGLE, &default_route_change_event_asyncid);
@@ -697,6 +698,8 @@ static void *WanManagerSyseventHandler(void *args)
     sysevent_setnotification(sysevent_msg_fd, sysevent_msg_token, SYSEVENT_IPV6_ADDRESS, &primary_v6ipaddress_asyncid);
 #endif
 #endif
+    sysevent_set_options(sysevent_msg_fd, sysevent_msg_token, SYSEVENT_DNS_RESTART, TUPLE_FLAG_EVENT);
+    sysevent_setnotification(sysevent_msg_fd, sysevent_msg_token, SYSEVENT_DNS_RESTART, &dns_restart_asyncid);
 
     for(;;)
     {
@@ -1119,6 +1122,23 @@ static void *WanManagerSyseventHandler(void *args)
             }
 #endif
 #endif
+            else if (strcmp(name, SYSEVENT_DNS_RESTART) == 0)
+            {
+                char ifName[BUFLEN_64] = {0};
+
+               sysevent_get(sysevent_fd, sysevent_token, SYSEVENT_CURRENT_WAN_IFNAME, ifName, sizeof(ifName));
+               if (ifName[0] != 0)
+               {
+                   DML_VIRTUAL_IFACE *p_VirtIf = WanMgr_GetVirtualIfaceByName_locked(ifName);
+
+                    if (p_VirtIf != NULL)
+                    {
+                        CcspTraceWarning(("%s line %d: %s reset DNS configuration \n", __FUNCTION__, __LINE__, p_VirtIf->Name));
+                        p_VirtIf->Reset = TRUE;
+                        WanMgr_VirtualIfaceData_release(ifName);
+                    }
+                }
+            }
             else
             {
                 CcspTraceWarning(("%s %d undefined event %s:%s \n", __FUNCTION__, __LINE__, name, val));

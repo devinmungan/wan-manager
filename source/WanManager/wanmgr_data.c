@@ -373,6 +373,32 @@ DML_DSLITE_LIST *WanMgr_getDSLiteEntryByIdx_locked(UINT idx)
     return NULL;
 }
 
+DML_DSLITE_LIST *WanMgr_getDSLiteEntryByAlias_locked(char *Alias)
+{
+    if (Alias == NULL)
+        return NULL;
+
+    if (pthread_mutex_lock(&gWanMgrDataBase.gDataMutex) == 0)
+    {
+        WanMgr_DSLite_Data_t *pDSLite = &gWanMgrDataBase.DSLite;
+        DML_DSLITE_LIST *pCfg = pDSLite->DSLiteList;
+
+        while (pCfg != NULL)
+        {
+            if (!strcmp(pCfg->CurrCfg.Alias, Alias))
+            {
+                return pCfg;
+            }
+
+            pCfg = pCfg->next;
+        }
+
+        WanMgr_GetDSLiteData_release();
+    }
+
+    return NULL;
+}
+
 WanMgr_DSLite_Data_t* WanMgr_GetDSLiteData_locked(void)
 {
     WanMgr_DSLite_Data_t* pDSLiteData = &(gWanMgrDataBase.DSLite);
