@@ -504,7 +504,7 @@ typedef struct _DML_DSLITE_CONFIG
     DML_WAN_DSLITE_ADDR_METHOD          Origin;
     CHAR                                TunnelIface[BUFLEN_256];
     CHAR                                TunneledIface[BUFLEN_256];
-    DML_WAN_DSLITE_ADDR_PRECEDENCE      Type;
+    DML_WAN_DSLITE_ADDR_PRECEDENCE      Type; // EndpointAddressTypePrecedence
     CHAR                                AddrInUse[BUFLEN_256];
     BOOL                                MssClampingEnable;
     UINT                                TcpMss;       // X_RDKCENTRAL-COM_Tcpmss
@@ -553,6 +553,7 @@ typedef enum
     WAN_STATE_IPV6_LEASED,
     WAN_STATE_DUAL_STACK_ACTIVE,
     WAN_STATE_MAPT_ACTIVE,
+    WAN_STATE_DSLITE_ACTIVE,
     WAN_STATE_REFRESHING_WAN,
     WAN_STATE_DECONFIGURING_WAN,
     WAN_STATE_STANDBY
