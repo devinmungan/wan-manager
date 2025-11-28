@@ -34,6 +34,21 @@ WANMGR_DATA_ST gWanMgrDataBase;
 
 #ifdef FEATURE_DSLITE_V2
 /******** WANMGR DSLITE FUNCTIONS ********/
+BOOL WanMgr_DSLite_FeatureEnabled(void)
+{
+    WanMgr_DSLite_Data_t *pDSLiteData;
+    BOOL enabled = FALSE;
+
+    pDSLiteData = WanMgr_GetDSLiteData_locked();
+    if (!pDSLiteData)
+        return enabled;
+
+    enabled = pDSLiteData->Enable;
+
+    WanMgr_GetDSLiteData_release();
+    return enabled;
+}
+
 ANSC_STATUS WanMgr_DSLite_UpdateVirtIfDSLiteCfg(UINT inst)
 {
     DML_DSLITE_LIST *entry;
@@ -366,6 +381,30 @@ DML_DSLITE_LIST *WanMgr_getDSLiteEntryByIdx_locked(UINT idx)
             {
                 return entry;
             }
+            entry = entry->next;
+        }
+        WanMgr_GetDSLiteData_release();
+    }
+    return NULL;
+}
+
+DML_DSLITE_LIST *WanMgr_getDSLiteEntryByAlias_locked(char *Alias)
+{
+    if (Alias == NULL)
+        return NULL;
+
+    if (pthread_mutex_lock(&gWanMgrDataBase.gDataMutex) == 0)
+    {
+        WanMgr_DSLite_Data_t *pDSLite = &gWanMgrDataBase.DSLite;
+        DML_DSLITE_LIST *entry = pDSLite->DSLiteList;
+
+        while (entry != NULL)
+        {
+            if (!strcmp(entry->CurrCfg.Alias, Alias))
+            {
+                return entry;
+            }
+
             entry = entry->next;
         }
         WanMgr_GetDSLiteData_release();
