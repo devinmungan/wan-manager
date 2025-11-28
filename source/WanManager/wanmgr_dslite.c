@@ -38,6 +38,71 @@
 #include "wanmgr_rdkbus_apis.h"
 #include "wanmgr_data.h"
 
+VOID WanMgr_DSLite_UpdateEndPointName(DML_VIRTUAL_IFACE* pVirtIf, const char* newEndpoint)
+{
+    DML_DSLITE_LIST *entry;
+
+    if (!newEndpoint || !pVirtIf)
+        return;
+
+    entry = WanMgr_getDSLiteEntryByAlias_locked(pVirtIf->DSLite.Path);
+    if (!entry)
+        return;
+
+    strncpy(entry->CurrCfg.EndpointName, newEndpoint, sizeof(entry->CurrCfg.EndpointName) - 1);
+    entry->CurrCfg.EndpointName[sizeof(entry->CurrCfg.EndpointName) - 1] = '\0';
+
+    WanMgr_GetDSLiteData_release();
+    return;
+}
+
+BOOL WanMgr_DSLite_isEndpointNameChanged(DML_VIRTUAL_IFACE* pVirtIf, const char* newEndpoint)
+{
+    DML_DSLITE_LIST *entry;
+    BOOL changed = FALSE;
+
+    if (!newEndpoint || !pVirtIf)
+        return FALSE;
+
+    entry = WanMgr_getDSLiteEntryByAlias_locked(pVirtIf->DSLite.Path);
+    if (!entry)
+        return FALSE;
+
+    changed = (strcasecmp(entry->CurrCfg.EndpointName, newEndpoint) != 0);
+
+    WanMgr_GetDSLiteData_release();
+    return changed;
+}
+
+BOOL WanMgr_DSLite_isEndpointAssigned(DML_VIRTUAL_IFACE *pVirtIf)
+{
+    DML_DSLITE_LIST *entry;
+    BOOL assigned = FALSE;
+
+    entry = WanMgr_getDSLiteEntryByAlias_locked(pVirtIf->DSLite.Path);
+    if (!entry)
+    return FALSE;
+
+    if (entry->CurrCfg.Mode == DSLITE_ENDPOINT_DHCPV6)
+    {
+        assigned = !IS_EMPTY_STRING(entry->CurrCfg.EndpointName);
+    }
+    else if (entry->CurrCfg.Mode == DSLITE_ENDPOINT_STATIC)
+    {
+        if (entry->CurrCfg.Type == DSLITE_ENDPOINT_FQDN)
+        {
+            assigned = !IS_EMPTY_STRING(entry->CurrCfg.EndpointName);
+        }
+        else if (entry->CurrCfg.Type == DSLITE_ENDPOINT_IPV6ADDRESS)
+        {
+            assigned = !IS_EMPTY_STRING(entry->CurrCfg.EndpointAddr);
+        }
+    }
+
+    WanMgr_GetDSLiteData_release();
+    return assigned;
+}
+
 /* Get whole DSLite conf from syscfg */
 ANSC_STATUS WanMgr_DSLiteInit(void)
 {
