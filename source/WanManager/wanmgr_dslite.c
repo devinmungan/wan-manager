@@ -475,6 +475,42 @@ ANSC_STATUS WanMgr_DSLite_SaveEntryConfig(UINT inst)
             ret = ANSC_STATUS_FAILURE;
     }
 
+    /* Update DSLite tunnel syscfg parameters only if values changed */
+    snprintf(key, sizeof(key), "dslite_status_%lu", inst);
+    if (prev->Status != curr->Status)
+    {
+        if (WanMgr_SysCfgSetUint(key, curr->Status) != ANSC_STATUS_SUCCESS)
+            ret = ANSC_STATUS_FAILURE;
+    }
+
+    snprintf(key, sizeof(key), "dslite_addr_inuse_%lu", inst);
+    if (strcmp(prev->AddrInUse, curr->AddrInUse) != 0)
+    {
+        if (WanMgr_SysCfgSetStr(key, curr->AddrInUse) != ANSC_STATUS_SUCCESS)
+            ret = ANSC_STATUS_FAILURE;
+    }
+
+    snprintf(key, sizeof(key), "dslite_origin_%lu", inst);
+    if (prev->Origin != curr->Origin)
+    {
+        if (WanMgr_SysCfgSetUint(key, curr->Origin) != ANSC_STATUS_SUCCESS)
+            ret = ANSC_STATUS_FAILURE;
+    }
+
+    snprintf(key, sizeof(key), "dslite_tunnel_interface_%lu", inst);
+    if (strcmp(prev->TunnelIface, curr->TunnelIface) != 0)
+    {
+        if (WanMgr_SysCfgSetStr(key, curr->TunnelIface) != ANSC_STATUS_SUCCESS)
+            ret = ANSC_STATUS_FAILURE;
+    }
+
+    snprintf(key, sizeof(key), "dslite_tunneled_interface_%lu", inst);
+    if (strcmp(prev->TunneledIface, curr->TunneledIface) != 0)
+    {
+        if (WanMgr_SysCfgSetStr(key, curr->TunneledIface) != ANSC_STATUS_SUCCESS)
+            ret = ANSC_STATUS_FAILURE;
+    }
+
     if (syscfg_commit() != 0)
     {
         CcspTraceError(("%s: syscfg_commit() failed\n", __FUNCTION__));
@@ -848,14 +884,14 @@ ANSC_STATUS WanMgr_DSLite_SetupTunnel(DML_VIRTUAL_IFACE *pVirtIf)
                 CcspTraceInfo(("%s: DNS resolution time = %lu\n", __FUNCTION__, now));
             }
         }
+    }
 
-        if (resolved_aftr[0] == '\0' || strcmp(resolved_aftr, "::") == 0)
-        {
-            CcspTraceError(("%s: Unable to resolve AFTR FQDN '%s' for inst=%u\n", __FUNCTION__, aftr_buf, inst));
-            sysevent_set(sysevent_fd, sysevent_token, status_key, "dns_error", 0);
-            WanMgr_GetDSLiteData_release();
-            return ANSC_STATUS_FAILURE;
-        }
+    if (resolved_aftr[0] == '\0' || strcmp(resolved_aftr, "::") == 0)
+    {
+        CcspTraceError(("%s: Unable to resolve AFTR FQDN '%s' for inst=%u\n", __FUNCTION__, aftr_buf, inst));
+        sysevent_set(sysevent_fd, sysevent_token, status_key, "dns_error", 0);
+        WanMgr_GetDSLiteData_release();
+        return ANSC_STATUS_FAILURE;
     }
 
     CcspTraceInfo(("%s: AFTR resolved to %s\n", __FUNCTION__, resolved_aftr));
@@ -998,6 +1034,7 @@ ANSC_STATUS WanMgr_DSLite_TeardownTunnel(DML_VIRTUAL_IFACE *pVirtIf)
     cfg->AddrInUse[0] = '\0';
     cfg->TunnelIface[0] = '\0';
     cfg->TunneledIface[0] = '\0';
+    cfg->Origin = 0;
     cfg->Status = WAN_IFACE_DSLITE_STATE_DOWN;
 
     WanMgr_GetDSLiteData_release();
