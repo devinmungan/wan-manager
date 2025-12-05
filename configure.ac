@@ -125,6 +125,18 @@ AC_ARG_ENABLE([dslite_v2],
              [echo "DSLite support is disabled"])
 AM_CONDITIONAL(DSLITE_SUPPORT, test "x$DSLITE_SUPPORT_ENABLED" = xtrue)
 
+AC_ARG_ENABLE([dslite_v2_dual_mode],
+             AS_HELP_STRING([--enable-dslite-v2-dual-mode],[enable DSLite v2 dual mode support (default is no)]),
+             [
+              case "${enableval}" in
+               yes) DSLITE_DUAL_MODE_SUPPORT_ENABLED=true;;
+               no)  DSLITE_DUAL_MODE_SUPPORT_ENABLED=false;;
+               *) AC_MSG_ERROR([bad value ${enableval} for --enable-dslite-v2-dual-mode ]);;
+              esac
+             ],
+             [echo "DSLite v2 dual mode support is disabled"])
+AM_CONDITIONAL(DSLITE_DUAL_MODE_SUPPORT, test "x$DSLITE_DUAL_MODE_SUPPORT_ENABLED" = xtrue)
+
 dnl Checks for header files.
 AC_CHECK_HEADERS([limits.h memory.h stdlib.h string.h sys/socket.h unistd.h])
 

@@ -78,15 +78,16 @@ BOOL DSLite_SetParamBoolValue(ANSC_HANDLE hInsContext, char *ParamName, BOOL bVa
     {
         if (pDSLiteData->Enable != bValue)
         {
+#ifndef FEATURE_DSLITE_V2_DUAL_MODE
             UINT deviceMode = 0;
-
             WanMgr_SysCfgGetUint("last_erouter_mode", &deviceMode);
-            if (bValue && (DML_WAN_DEVICE_MODE)deviceMode != DML_WAN_DEVICE_MODE_Ipv6)
+            if (bValue && (DML_WAN_DEVICE_MODE)(deviceMode + 1) != DML_WAN_DEVICE_MODE_Ipv6) // last_erouter_mode is zero based
             {
                 CcspTraceWarning(("Cannot set DSLite, the device mode is not ipv6 only! \n"));
                 ret = FALSE;
             }
             else
+#endif
             {
                 if (WanMgr_SysCfgSetUint("dslite_enable", bValue ? 1 : 0) != ANSC_STATUS_SUCCESS)
                 {
@@ -262,21 +263,22 @@ BOOL InterfaceSetting4_SetParamBoolValue(ANSC_HANDLE hInsContext, char *ParamNam
     UINT inst = (UINT)(uintptr_t)hInsContext;
     DML_DSLITE_LIST *entry;
     DML_DSLITE_CONFIG *cfg;
-    UINT deviceMode = 0;
     BOOL ret = FALSE;
 
     entry = WanMgr_getDSLiteEntryByInstance_locked(inst);
     if (!entry)
         return ret;
 
+#ifndef FEATURE_DSLITE_V2_DUAL_MODE
+    UINT deviceMode = 0;
     WanMgr_SysCfgGetUint("last_erouter_mode", &deviceMode);
-    if ((DML_WAN_DEVICE_MODE)deviceMode != DML_WAN_DEVICE_MODE_Ipv6)
+    if ((DML_WAN_DEVICE_MODE)(deviceMode + 1) != DML_WAN_DEVICE_MODE_Ipv6) // last_erouter_mode is zero based
     {
         CcspTraceWarning(("Cannot set DSLite.InterfaceSetting, device mode is not ipv6 only\n"));
         WanMgr_GetDSLiteData_release();
         return FALSE;
     }
-
+#endif
     cfg = &entry->CurrCfg;
 
     if (strcmp(ParamName, "Enable") == 0)

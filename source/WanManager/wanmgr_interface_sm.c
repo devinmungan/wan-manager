@@ -4116,7 +4116,7 @@ static eWanState_t wan_state_dual_stack_active(WanMgr_IfaceSM_Controller_t* pWan
         }
     }
 #endif //FEATURE_MAPT
-#ifdef FEATURE_DSLITE_V2
+#if defined(FEATURE_DSLITE_V2) && defined(FEATURE_DSLITE_V2_DUAL_MODE)
     else if (WanMgr_DSLite_isEnabled(p_VirtIf) == TRUE &&
              WanMgr_DSLite_isEndpointAssigned(p_VirtIf) == TRUE &&
              pInterface->Selection.Status == WAN_IFACE_ACTIVE)
