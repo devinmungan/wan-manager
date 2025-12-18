@@ -853,6 +853,26 @@ void WanMgr_Dslite_DelIpRules(const char *if_name, const char *wan_ipv4)
     WanManager_DoSystemAction("WanMgr_Dslite_DelIpRules:", cmd);
 }
 
+void WanMgr_Dslite_RestartLanServices(DML_WAN_IP_MODE ipMode)
+{
+    char cmd[BUFLEN_256];
+
+    if (ipMode == DML_WAN_IP_MODE_IPV6_ONLY)
+    {
+        snprintf(cmd, sizeof(cmd), "/etc/utopia/service.d/service_mldproxy.sh mldproxy-restart");
+        WanManager_DoSystemAction("WanMgr_Dslite_RestartLanServices:", cmd);
+    }
+    else
+    {
+        snprintf(cmd, sizeof(cmd),"/etc/utopia/service.d/service_mcastproxy.sh mcastproxy-restart");
+        WanManager_DoSystemAction("WanMgr_Dslite_RestartLanServices:", cmd);
+    }
+
+    // Restart LAN DHCP 
+    sysevent_set(sysevent_fd, sysevent_token, SYSEVENT_DHCP_SERVER_RESTART, NULL, 0);
+}
+
+
 ANSC_STATUS WanMgr_DSLite_AddFirewallRules(UINT inst, const char *tunnelIf, const DML_DSLITE_CONFIG *cfg)
 {
     if (!tunnelIf || !cfg)

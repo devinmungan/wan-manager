@@ -1341,12 +1341,14 @@ static int wan_tearDownIPv4(WanMgr_IfaceSM_Controller_t * pWanIfaceCtrl)
         WanMgrDml_GetConfigData_release(pWanConfigData);
     }
 
-    if ( ( FALSE == BackupWanDnsSupport ) && 
-         (p_VirtIf->MAP.MaptStatus == WAN_IFACE_MAPT_STATE_UP && strstr(pInterface->BaseInterface, "Ethernet") == NULL) )
+    if ( (FALSE == BackupWanDnsSupport) &&
+     ( (p_VirtIf->DSLite.Status == WAN_IFACE_DSLITE_STATE_UP) ||
+       ((p_VirtIf->MAP.MaptStatus == WAN_IFACE_MAPT_STATE_UP) && strstr(pInterface->BaseInterface, "Ethernet") == NULL) ) )
 #else
-    //TODO:  XB devices use the DNS of primary for backup interfaces. Clear V4 DNS only if MAPT is up
+    //TODO:  XB devices use the DNS of primary for backup interfaces. Clear V4 DNS only if MAPT or DSLite is up
     /* FIXME: Issue in DNS ipv6 resolution when ethwan enabled *//* Workaround: We keep the ipv4 entries for name resolution */
-    if(p_VirtIf->MAP.MaptStatus == WAN_IFACE_MAPT_STATE_UP && strstr(pInterface->BaseInterface, "Ethernet") == NULL)
+    if ( (p_VirtIf->DSLite.Status == WAN_IFACE_DSLITE_STATE_UP) ||
+     ((p_VirtIf->MAP.MaptStatus == WAN_IFACE_MAPT_STATE_UP) && strstr(pInterface->BaseInterface, "Ethernet") == NULL) )
 #endif /** _RDKB_GLOBAL_PRODUCT_REQ_ */ 
 #endif
     {
@@ -1661,17 +1663,9 @@ static int wan_tearDownDSLite(WanMgr_IfaceSM_Controller_t *pWanIfaceCtrl)
         /* Dual-stack mode: update routing */
         WanMgr_Dslite_AddIpRules(p_VirtIf->Name);
 
-        // TODO: Check if LAN-side DHCP/DNS/IGMP service restarts are actually required
-#if defined(_LG_OFW_)
-        v_secure_system("/etc/utopia/service.d/service_dhcp_server.sh dhcp_server-stop" "; "
-                        "/etc/utopia/service.d/service_dhcp_server.sh dhcp_server-start" "; "
-                        "/etc/utopia/service.d/service_mcastproxy.sh mcastproxy-restart");
-#else
-        v_secure_system("systemctl stop dnsmasq.service" "; "
-                        "systemctl start dnsmasq.service" "; "
-                        "/etc/utopia/service.d/service_mcastproxy.sh mcastproxy-restart");
-#endif
     }
+
+    WanMgr_Dslite_RestartLanServices(p_VirtIf->IP.Mode);
 
     WanMgr_ProcessTelemetryMarker(p_VirtIf, WAN_ERROR_DSLITE_STATUS_DOWN);
     p_VirtIf->DSLite.Status = WAN_IFACE_DSLITE_STATE_DOWN;
@@ -1711,19 +1705,8 @@ static int wan_setUpDSLite(WanMgr_IfaceSM_Controller_t *pWanIfaceCtrl)
             CcspTraceError(("%s %d - Failure writing to /proc file\n", __FUNCTION__, __LINE__));
         }
     }
-    else
-    {
-       // TODO: Check if LAN-side DHCP/DNS/IGMP service restarts are actually required
-#if defined(_LG_OFW_)
-        v_secure_system ("/etc/utopia/service.d/service_dhcp_server.sh dhcp_server-stop" "; "
-                "/etc/utopia/service.d/service_dhcp_server.sh dhcp_server-start" "; "
-                "/etc/utopia/service.d/service_mcastproxy.sh mcastproxy-restart");
-#else
-        v_secure_system ("systemctl stop dnsmasq.service" "; "
-                "systemctl start dnsmasq.service" "; "
-                "/etc/utopia/service.d/service_mcastproxy.sh mcastproxy-restart");
-#endif
-    }
+
+    WanMgr_Dslite_RestartLanServices(p_VirtIf->IP.Mode);
 
     WanMgr_ProcessTelemetryMarker(p_VirtIf, WAN_INFO_DSLITE_STATUS_UP);
     p_VirtIf->DSLite.Status = WAN_IFACE_DSLITE_STATE_UP;
